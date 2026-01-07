@@ -614,4 +614,75 @@ impl Database {
         log::info!("已删除所有 Live 配置备份");
         Ok(())
     }
+
+    // ==================== Hybrid Mode Config ====================
+
+    /// 获取混合模式配置
+    pub fn get_hybrid_mode_config(
+        &self,
+        app_type: &str,
+    ) -> Result<crate::proxy::types::HybridModeConfig, AppError> {
+        let conn = lock_conn!(self.conn);
+
+        let result = conn.query_row(
+            "SELECT hybrid_mode_enabled, url_latency_test_interval, url_circuit_failure_threshold
+             FROM proxy_config WHERE app_type = ?1",
+            [app_type],
+            |row| {
+                Ok(crate::proxy::types::HybridModeConfig {
+                    enabled: row.get::<_, i32>(0).unwrap_or(0) != 0,
+                    latency_test_interval: row.get::<_, i64>(1).unwrap_or(300) as u64,
+                    url_circuit_failure_threshold: row.get::<_, i32>(2).unwrap_or(3) as u32,
+                })
+            },
+        );
+
+        match result {
+            Ok(config) => Ok(config),
+            Err(_) => Ok(crate::proxy::types::HybridModeConfig {
+                enabled: true,
+                latency_test_interval: 300,
+                url_circuit_failure_threshold: 3,
+            }),
+        }
+    }
+
+    /// 设置混合模式启用状态
+    pub fn set_hybrid_mode_enabled(&self, app_type: &str, enabled: bool) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+
+        conn.execute(
+            "UPDATE proxy_config SET hybrid_mode_enabled = ?1 WHERE app_type = ?2",
+            rusqlite::params![if enabled { 1 } else { 0 }, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// 更新混合模式配置
+    pub fn update_hybrid_mode_config(
+        &self,
+        app_type: &str,
+        config: &crate::proxy::types::HybridModeConfig,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+
+        conn.execute(
+            "UPDATE proxy_config SET
+                hybrid_mode_enabled = ?1,
+                url_latency_test_interval = ?2,
+                url_circuit_failure_threshold = ?3
+             WHERE app_type = ?4",
+            rusqlite::params![
+                if config.enabled { 1 } else { 0 },
+                config.latency_test_interval as i64,
+                config.url_circuit_failure_threshold as i32,
+                app_type
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(())
+    }
 }

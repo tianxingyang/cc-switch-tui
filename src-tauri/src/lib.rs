@@ -1,9 +1,12 @@
 mod app_config;
+#[cfg(feature = "tauri")]
 mod app_store;
+#[cfg(feature = "tauri")]
 mod auto_launch;
 mod claude_mcp;
 mod claude_plugin;
 mod codex_config;
+#[cfg(feature = "tauri")]
 mod commands;
 mod config;
 mod database;
@@ -21,11 +24,13 @@ mod proxy;
 mod services;
 mod settings;
 mod store;
+#[cfg(feature = "tauri")]
 mod tray;
 mod usage_script;
 
 pub use app_config::{AppType, McpApps, McpServer, MultiAppConfig};
 pub use codex_config::{get_codex_auth_path, get_codex_config_path, write_codex_live_atomic};
+#[cfg(feature = "tauri")]
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::Database;
@@ -44,14 +49,20 @@ pub use services::{
 };
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
+#[cfg(feature = "tauri")]
 use tauri_plugin_deep_link::DeepLinkExt;
+#[cfg(feature = "tauri")]
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
+#[cfg(feature = "tauri")]
 use std::sync::Arc;
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "tauri", target_os = "macos"))]
 use tauri::image::Image;
+#[cfg(feature = "tauri")]
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+#[cfg(feature = "tauri")]
 use tauri::RunEvent;
+#[cfg(feature = "tauri")]
 use tauri::{Emitter, Manager};
 
 /// 统一处理 ccswitch:// 深链接 URL
@@ -59,6 +70,7 @@ use tauri::{Emitter, Manager};
 /// - 解析 URL
 /// - 向前端发射 `deeplink-import` / `deeplink-error` 事件
 /// - 可选：在成功时聚焦主窗口
+#[cfg(feature = "tauri")]
 fn handle_deeplink_url(
     app: &tauri::AppHandle,
     url_str: &str,
@@ -114,6 +126,7 @@ fn handle_deeplink_url(
 }
 
 /// 更新托盘菜单的Tauri命令
+#[cfg(feature = "tauri")]
 #[tauri::command]
 async fn update_tray_menu(
     app: tauri::AppHandle,
@@ -135,7 +148,7 @@ async fn update_tray_menu(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "tauri", target_os = "macos"))]
 fn macos_tray_icon() -> Option<Image<'static>> {
     const ICON_BYTES: &[u8] = include_bytes!("../icons/tray/macos/statusbar_template_3x.png");
 
@@ -148,7 +161,7 @@ fn macos_tray_icon() -> Option<Image<'static>> {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(feature = "tauri")]
 pub fn run() {
     let mut builder = tauri::Builder::default();
 
@@ -895,6 +908,7 @@ pub fn run() {
 /// 在应用退出前检查代理服务器状态，如果正在运行则停止代理并恢复 Live 配置。
 /// 确保 Claude Code/Codex/Gemini 的配置不会处于损坏状态。
 /// 使用 stop_with_restore_keep_state 保留 settings 表中的代理状态，下次启动时自动恢复。
+#[cfg(feature = "tauri")]
 pub async fn cleanup_before_exit(app_handle: &tauri::AppHandle) {
     if let Some(state) = app_handle.try_state::<store::AppState>() {
         let proxy_service = &state.proxy_service;
@@ -998,6 +1012,7 @@ fn is_chinese_locale() -> bool {
 
 /// 显示迁移错误对话框
 /// 返回 true 表示用户选择重试，false 表示用户选择退出
+#[cfg(feature = "tauri")]
 fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
     let title = if is_chinese_locale() {
         "配置迁移失败"
@@ -1049,6 +1064,7 @@ fn show_migration_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
 
 /// 显示数据库初始化/Schema 迁移失败对话框
 /// 返回 true 表示用户选择重试，false 表示用户选择退出
+#[cfg(feature = "tauri")]
 fn show_database_init_error_dialog(
     app: &tauri::AppHandle,
     db_path: &std::path::Path,

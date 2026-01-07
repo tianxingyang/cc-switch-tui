@@ -191,3 +191,25 @@ pub struct AppProxyConfig {
     /// 计算错误率的最小请求数
     pub circuit_min_requests: u32,
 }
+
+/// Provider 端点（带健康追踪）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderEndpoint {
+    pub id: i64,
+    pub provider_id: String,
+    pub app_type: String,
+    pub url: String,
+    pub latency_ms: Option<u64>,
+    pub last_tested_at: Option<i64>,
+    pub is_healthy: bool,
+    pub consecutive_failures: u32,
+    pub is_primary: bool,
+}
+
+/// 混合模式配置
+#[derive(Debug, Clone)]
+pub struct HybridModeConfig {
+    pub enabled: bool,
+    pub latency_test_interval: u64,
+    pub url_circuit_failure_threshold: u32,
+}

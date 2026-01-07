@@ -6,7 +6,7 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
 use indexmap::IndexMap;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 impl Database {
@@ -363,5 +363,119 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    /// 获取带健康数据的端点列表
+    pub fn get_provider_endpoints_with_health(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<Vec<crate::proxy::types::ProviderEndpoint>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, provider_id, app_type, url, latency_ms, last_tested_at,
+                        is_healthy, consecutive_failures, is_primary
+                 FROM provider_endpoints
+                 WHERE provider_id = ?1 AND app_type = ?2
+                 ORDER BY is_primary DESC, latency_ms ASC NULLS LAST",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        let endpoints = stmt
+            .query_map(params![provider_id, app_type], |row| {
+                Ok(crate::proxy::types::ProviderEndpoint {
+                    id: row.get(0)?,
+                    provider_id: row.get(1)?,
+                    app_type: row.get(2)?,
+                    url: row.get(3)?,
+                    latency_ms: row.get(4)?,
+                    last_tested_at: row.get(5)?,
+                    is_healthy: row.get::<_, i32>(6)? != 0,
+                    consecutive_failures: row.get::<_, i32>(7)? as u32,
+                    is_primary: row.get::<_, i32>(8)? != 0,
+                })
+            })
+            .map_err(|e| AppError::Database(e.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+
+        Ok(endpoints)
+    }
+
+    /// 更新端点健康状态
+    pub fn update_endpoint_health(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        url: &str,
+        latency_ms: Option<u64>,
+        is_healthy: bool,
+        consecutive_failures: u32,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "UPDATE provider_endpoints
+             SET latency_ms = ?1, last_tested_at = ?2, is_healthy = ?3, consecutive_failures = ?4
+             WHERE provider_id = ?5 AND app_type = ?6 AND url = ?7",
+            params![
+                latency_ms.map(|v| v as i64),
+                now,
+                if is_healthy { 1 } else { 0 },
+                consecutive_failures as i32,
+                provider_id,
+                app_type,
+                url
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 设置主端点
+    pub fn set_primary_endpoint(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        url: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        // 先清除该 provider 的所有主端点标记
+        conn.execute(
+            "UPDATE provider_endpoints SET is_primary = 0
+             WHERE provider_id = ?1 AND app_type = ?2",
+            params![provider_id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        // 设置新的主端点
+        conn.execute(
+            "UPDATE provider_endpoints SET is_primary = 1
+             WHERE provider_id = ?1 AND app_type = ?2 AND url = ?3",
+            params![provider_id, app_type, url],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 获取最佳端点 URL（主端点或延迟最低的健康端点）
+    pub fn get_best_endpoint_url(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let url: Option<String> = conn
+            .query_row(
+                "SELECT url FROM provider_endpoints
+                 WHERE provider_id = ?1 AND app_type = ?2 AND is_healthy = 1
+                 ORDER BY is_primary DESC, latency_ms ASC NULLS LAST
+                 LIMIT 1",
+                params![provider_id, app_type],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(url)
     }
 }

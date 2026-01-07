@@ -828,6 +828,81 @@ impl ProviderService {
             }
         }
     }
+
+    /// 宽松版本的配置提取（供 TUI 使用）
+    ///
+    /// 与 `extract_credentials` 不同，此方法缺少字段时返回空字符串而非错误，
+    /// 适用于编辑表单时显示现有值。
+    pub fn extract_credentials_lenient(
+        provider: &Provider,
+        app_type: &AppType,
+    ) -> (String, String) {
+        match app_type {
+            AppType::Claude => {
+                let env = provider
+                    .settings_config
+                    .get("env")
+                    .and_then(|v| v.as_object());
+
+                let api_key = env
+                    .and_then(|e| {
+                        e.get("ANTHROPIC_AUTH_TOKEN")
+                            .or_else(|| e.get("ANTHROPIC_API_KEY"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let base_url = env
+                    .and_then(|e| e.get("ANTHROPIC_BASE_URL"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                (api_key, base_url)
+            }
+            AppType::Codex => {
+                let api_key = provider
+                    .settings_config
+                    .pointer("/auth/OPENAI_API_KEY")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let base_url = provider
+                    .settings_config
+                    .get("config")
+                    .and_then(|v| v.as_str())
+                    .and_then(|toml| {
+                        Regex::new(r#"base_url\s*=\s*["']([^"']+)["']"#)
+                            .ok()
+                            .and_then(|re| re.captures(toml))
+                            .and_then(|caps| caps.get(1))
+                            .map(|m| m.as_str().to_string())
+                    })
+                    .unwrap_or_default();
+
+                (api_key, base_url)
+            }
+            AppType::Gemini => {
+                let api_key = provider
+                    .settings_config
+                    .pointer("/env/GEMINI_API_KEY")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let base_url = provider
+                    .settings_config
+                    .pointer("/env/GOOGLE_GEMINI_BASE_URL")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                (api_key, base_url)
+            }
+        }
+    }
 }
 
 /// Normalize Claude model keys in a JSON value

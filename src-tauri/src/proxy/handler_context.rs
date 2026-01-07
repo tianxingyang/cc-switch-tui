@@ -203,10 +203,10 @@ impl RequestContext {
             state.status.clone(),
             state.current_providers.clone(),
             state.failover_manager.clone(),
-            state.app_handle.clone(),
             self.current_provider_id.clone(),
             first_byte_timeout,
             idle_timeout,
+            Some(state.url_router.clone()),
         )
     }
 

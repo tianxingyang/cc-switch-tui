@@ -101,10 +101,10 @@ pub struct RequestForwarder {
     current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
     /// 故障转移切换管理器
     failover_manager: Arc<FailoverSwitchManager>,
-    /// AppHandle，用于发射事件和更新托盘
-    app_handle: Option<tauri::AppHandle>,
     /// 请求开始时的"当前供应商 ID"（用于判断是否需要同步 UI/托盘）
     current_provider_id_at_start: String,
+    /// URL 路由器（混合模式）
+    url_router: Option<Arc<super::url_router::UrlRouter>>,
 }
 
 impl RequestForwarder {
@@ -115,10 +115,10 @@ impl RequestForwarder {
         status: Arc<RwLock<ProxyStatus>>,
         current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
         failover_manager: Arc<FailoverSwitchManager>,
-        app_handle: Option<tauri::AppHandle>,
         current_provider_id_at_start: String,
         _streaming_first_byte_timeout: u64,
         _streaming_idle_timeout: u64,
+        url_router: Option<Arc<super::url_router::UrlRouter>>,
     ) -> Self {
         // 全局超时设置为 1800 秒（30 分钟），确保业务层超时配置能正常工作
         // 参考 Claude Code Hub 的 undici 全局超时设计
@@ -143,8 +143,8 @@ impl RequestForwarder {
             status,
             current_providers,
             failover_manager,
-            app_handle,
             current_provider_id_at_start,
+            url_router,
         }
     }
 
@@ -235,7 +235,14 @@ impl RequestForwarder {
 
             // 转发请求（每个 Provider 只尝试一次，重试由客户端控制）
             match self
-                .forward(provider, endpoint, &body, &headers, adapter.as_ref())
+                .forward(
+                    provider,
+                    endpoint,
+                    &body,
+                    &headers,
+                    adapter.as_ref(),
+                    app_type_str,
+                )
                 .await
             {
                 Ok(response) => {
@@ -281,16 +288,14 @@ impl RequestForwarder {
                                 latency
                             );
 
-                            // 异步触发供应商切换，更新 UI/托盘，并把“当前供应商”同步为实际使用的 provider
+                            // 异步触发供应商切换
                             let fm = self.failover_manager.clone();
-                            let ah = self.app_handle.clone();
                             let pid = provider.id.clone();
                             let pname = provider.name.clone();
                             let at = app_type_str.to_string();
 
                             tokio::spawn(async move {
-                                if let Err(e) = fm.try_switch(ah.as_ref(), &at, &pid, &pname).await
-                                {
+                                if let Err(e) = fm.try_switch(&at, &pid, &pname).await {
                                     log::error!("[Failover] 切换供应商失败: {e}");
                                 }
                             });
@@ -434,9 +439,35 @@ impl RequestForwarder {
         body: &Value,
         headers: &axum::http::HeaderMap,
         adapter: &dyn ProviderAdapter,
+        app_type: &str,
     ) -> Result<Response, ProxyError> {
-        // 使用适配器提取 base_url
-        let base_url = adapter.extract_base_url(provider)?;
+        // 使用适配器提取 config base_url
+        let config_base_url = adapter.extract_base_url(provider)?;
+
+        // 如果启用混合模式，使用 UrlRouter 选择最佳 URL
+        let base_url = if let Some(ref url_router) = self.url_router {
+            if url_router.is_hybrid_mode_enabled(app_type) {
+                match url_router
+                    .select_url(&provider.id, app_type, &config_base_url)
+                    .await
+                {
+                    Ok(url) => url,
+                    Err(e) => {
+                        log::warn!(
+                            "[{}] UrlRouter 选择失败，使用 config base_url: {}",
+                            adapter.name(),
+                            e
+                        );
+                        config_base_url
+                    }
+                }
+            } else {
+                config_base_url
+            }
+        } else {
+            config_base_url
+        };
+
         log::info!("[{}] base_url: {}", adapter.name(), base_url);
 
         // 检查是否需要格式转换

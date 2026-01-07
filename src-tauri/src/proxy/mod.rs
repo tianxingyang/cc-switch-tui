@@ -20,6 +20,7 @@ pub mod response_processor;
 pub(crate) mod server;
 pub mod session;
 pub(crate) mod types;
+pub mod url_router;
 pub mod usage;
 
 // 公开导出给外部使用（commands, services等模块需要）
@@ -39,6 +40,8 @@ pub use session::{
 };
 #[allow(unused_imports)]
 pub use types::{ProxyConfig, ProxyServerInfo, ProxyStatus};
+#[allow(unused_imports)]
+pub use url_router::UrlRouter;
 
 // 内部模块间共享（供子模块使用）
 // 注意：这个导出用于模块内部，编译器可能警告未使用但实际被子模块使用

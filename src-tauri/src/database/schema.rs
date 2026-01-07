@@ -346,6 +346,11 @@ impl Database {
                         Self::migrate_v2_to_v3(conn)?;
                         Self::set_user_version(conn, 3)?;
                     }
+                    3 => {
+                        log::info!("迁移数据库从 v3 到 v4（多 URL 混合模式支持）");
+                        Self::migrate_v3_to_v4(conn)?;
+                        Self::set_user_version(conn, 4)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -1257,6 +1262,57 @@ impl Database {
             }
         }
         Ok(false)
+    }
+
+    /// v3 -> v4 迁移：多 URL 混合模式支持
+    ///
+    /// 扩展 provider_endpoints 表添加健康追踪字段，
+    /// 扩展 proxy_config 表添加混合模式配置。
+    fn migrate_v3_to_v4(conn: &Connection) -> Result<(), AppError> {
+        // 1. 扩展 provider_endpoints 表
+        Self::add_column_if_missing(conn, "provider_endpoints", "latency_ms", "INTEGER")?;
+        Self::add_column_if_missing(conn, "provider_endpoints", "last_tested_at", "INTEGER")?;
+        Self::add_column_if_missing(
+            conn,
+            "provider_endpoints",
+            "is_healthy",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "provider_endpoints",
+            "consecutive_failures",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "provider_endpoints",
+            "is_primary",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+
+        // 2. 扩展 proxy_config 表添加混合模式配置
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "hybrid_mode_enabled",
+            "INTEGER NOT NULL DEFAULT 1",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "url_latency_test_interval",
+            "INTEGER NOT NULL DEFAULT 300",
+        )?;
+        Self::add_column_if_missing(
+            conn,
+            "proxy_config",
+            "url_circuit_failure_threshold",
+            "INTEGER NOT NULL DEFAULT 3",
+        )?;
+
+        log::info!("v3 -> v4 迁移完成：多 URL 混合模式支持");
+        Ok(())
     }
 
     fn add_column_if_missing(

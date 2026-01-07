@@ -65,6 +65,7 @@ fn wrap_command_for_windows(_obj: &mut Map<String, Value>) {
     // 非 Windows 平台不做任何处理
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStatus {

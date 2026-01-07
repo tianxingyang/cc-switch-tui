@@ -4,9 +4,10 @@
 
 use super::{
     failover_switch::FailoverSwitchManager, handlers, provider_router::ProviderRouter, types::*,
-    ProxyError,
+    url_router::UrlRouter, ProxyError,
 };
 use crate::database::Database;
+use crate::services::url_latency::UrlLatencyService;
 use axum::{
     routing::{get, post},
     Router,
@@ -28,10 +29,12 @@ pub struct ProxyState {
     pub current_providers: Arc<RwLock<std::collections::HashMap<String, (String, String)>>>,
     /// 共享的 ProviderRouter（持有熔断器状态，跨请求保持）
     pub provider_router: Arc<ProviderRouter>,
-    /// AppHandle，用于发射事件和更新托盘菜单
-    pub app_handle: Option<tauri::AppHandle>,
     /// 故障转移切换管理器
     pub failover_manager: Arc<FailoverSwitchManager>,
+    /// URL 路由器（混合模式）
+    pub url_router: Arc<UrlRouter>,
+    /// URL 延迟测试服务
+    pub latency_service: Arc<UrlLatencyService>,
 }
 
 /// 代理HTTP服务器
@@ -44,15 +47,15 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
-    pub fn new(
-        config: ProxyConfig,
-        db: Arc<Database>,
-        app_handle: Option<tauri::AppHandle>,
-    ) -> Self {
+    pub fn new(config: ProxyConfig, db: Arc<Database>) -> Self {
         // 创建共享的 ProviderRouter（熔断器状态将跨所有请求保持）
         let provider_router = Arc::new(ProviderRouter::new(db.clone()));
         // 创建故障转移切换管理器
         let failover_manager = Arc::new(FailoverSwitchManager::new(db.clone()));
+        // 创建 URL 路由器
+        let url_router = Arc::new(UrlRouter::new(db.clone()));
+        // 创建 URL 延迟测试服务
+        let latency_service = Arc::new(UrlLatencyService::new(db.clone(), url_router.clone()));
 
         let state = ProxyState {
             db,
@@ -61,8 +64,9 @@ impl ProxyServer {
             start_time: Arc::new(RwLock::new(None)),
             current_providers: Arc::new(RwLock::new(std::collections::HashMap::new())),
             provider_router,
-            app_handle,
             failover_manager,
+            url_router,
+            latency_service,
         };
 
         Self {
@@ -128,6 +132,22 @@ impl ProxyServer {
         // 保存服务器任务句柄
         *self.server_handle.write().await = Some(handle);
 
+        // 启动 URL 延迟测试服务（如果有任何应用启用了混合模式）
+        let should_start_latency_service = ["claude", "codex", "gemini"]
+            .iter()
+            .any(|app| self.state.url_router.is_hybrid_mode_enabled(app));
+
+        if should_start_latency_service {
+            // 获取测试间隔（使用 claude 的配置作为默认）
+            let interval = self
+                .state
+                .url_router
+                .get_hybrid_config("claude")
+                .latency_test_interval;
+            self.state.latency_service.start(interval).await;
+            log::info!("URL 延迟测试服务已启动，间隔 {} 秒", interval);
+        }
+
         Ok(ProxyServerInfo {
             address: self.config.listen_address.clone(),
             port: self.config.listen_port,
@@ -136,14 +156,17 @@ impl ProxyServer {
     }
 
     pub async fn stop(&self) -> Result<(), ProxyError> {
-        // 1. 发送关闭信号
+        // 1. 停止 URL 延迟测试服务
+        self.state.latency_service.stop().await;
+
+        // 2. 发送关闭信号
         if let Some(tx) = self.shutdown_tx.write().await.take() {
             let _ = tx.send(());
         } else {
             return Err(ProxyError::NotRunning);
         }
 
-        // 2. 等待服务器任务结束（带 5 秒超时保护）
+        // 3. 等待服务器任务结束（带 5 秒超时保护）
         if let Some(handle) = self.server_handle.write().await.take() {
             match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
                 Ok(Ok(())) => log::info!("代理服务器已完全停止"),

@@ -106,7 +106,11 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
 
 /// Write Claude live configuration, merging only credential fields
 fn write_claude_live(provider: &Provider) -> Result<(), AppError> {
-    const CRED_KEYS: &[&str] = &["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"];
+    const CRED_KEYS: &[&str] = &[
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+    ];
 
     let path = get_claude_settings_path();
     let mut live = if path.exists() {
@@ -115,7 +119,10 @@ fn write_claude_live(provider: &Provider) -> Result<(), AppError> {
         json!({})
     };
 
-    let provider_env = provider.settings_config.get("env").and_then(|v| v.as_object());
+    let provider_env = provider
+        .settings_config
+        .get("env")
+        .and_then(|v| v.as_object());
     if !live.get("env").map(|v| v.is_object()).unwrap_or(false) {
         live["env"] = json!({});
     }
@@ -133,11 +140,16 @@ fn write_claude_live(provider: &Provider) -> Result<(), AppError> {
 
 /// Write Codex live configuration, merging only credential fields
 fn write_codex_live(provider: &Provider) -> Result<(), AppError> {
-    let obj = provider.settings_config.as_object()
+    let obj = provider
+        .settings_config
+        .as_object()
         .ok_or_else(|| AppError::Config("Codex config must be object".into()))?;
-    let provider_auth = obj.get("auth")
+    let provider_auth = obj
+        .get("auth")
         .ok_or_else(|| AppError::Config("Codex config missing 'auth'".into()))?;
-    let provider_config = obj.get("config").and_then(|v| v.as_str())
+    let provider_config = obj
+        .get("config")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Config("Codex config missing 'config'".into()))?;
 
     // Merge auth.json - only OPENAI_API_KEY
@@ -147,7 +159,8 @@ fn write_codex_live(provider: &Provider) -> Result<(), AppError> {
     } else {
         json!({})
     };
-    if let (Some(live_obj), Some(prov_obj)) = (live_auth.as_object_mut(), provider_auth.as_object()) {
+    if let (Some(live_obj), Some(prov_obj)) = (live_auth.as_object_mut(), provider_auth.as_object())
+    {
         if let Some(v) = prov_obj.get("OPENAI_API_KEY") {
             live_obj.insert("OPENAI_API_KEY".into(), v.clone());
         } else {
@@ -164,12 +177,19 @@ fn write_codex_live(provider: &Provider) -> Result<(), AppError> {
         String::new()
     };
     let base_url_re = regex::Regex::new(r#"base_url\s*=\s*["']([^"']+)["']"#).unwrap();
-    let new_url = base_url_re.captures(provider_config).and_then(|c| c.get(1)).map(|m| m.as_str());
+    let new_url = base_url_re
+        .captures(provider_config)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str());
     if let Some(url) = new_url {
         if base_url_re.is_match(&live_config) {
-            live_config = base_url_re.replace(&live_config, format!(r#"base_url = "{}""#, url)).into();
+            live_config = base_url_re
+                .replace(&live_config, format!(r#"base_url = "{}""#, url))
+                .into();
         } else {
-            if !live_config.is_empty() && !live_config.ends_with('\n') { live_config.push('\n'); }
+            if !live_config.is_empty() && !live_config.ends_with('\n') {
+                live_config.push('\n');
+            }
             live_config.push_str(&format!(r#"base_url = "{}"{}"#, url, '\n'));
         }
     } else if base_url_re.is_match(&live_config) {
@@ -368,7 +388,13 @@ pub(crate) fn write_gemini_live(provider: &Provider) -> Result<(), AppError> {
     // One-time auth type detection to avoid repeated detection
     let auth_type = detect_gemini_auth_type(provider);
 
-    let mut env_map = json_to_env(&provider.settings_config)?;
+    // Read existing env first, then merge provider's env on top
+    // This preserves user presets like GEMINI_MODEL that aren't in provider config
+    let mut env_map = crate::gemini_config::read_gemini_env().unwrap_or_default();
+    let provider_env = json_to_env(&provider.settings_config)?;
+    for (k, v) in provider_env {
+        env_map.insert(k, v);
+    }
 
     // Prepare config to write to ~/.gemini/settings.json
     // Behavior:
